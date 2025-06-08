@@ -6,27 +6,29 @@ DOMAIN=$1
 PORT=$2
 
 if [[ -z "$DOMAIN" || -z "$PORT" ]]; then
-  echo "Usage: $0 domain.com backend_port"
+  echo "❌ Usage: $0 domain.com backend_port"
   exit 1
 fi
 
 SITES_AVAILABLE="/etc/nginx/sites-available"
 SITES_ENABLED="/etc/nginx/sites-enabled"
-CONFIG_PATH="$SITES_AVAILABLE/${DOMAIN}.conf"
-ENABLED_PATH="$SITES_ENABLED/${DOMAIN}.conf"
+CONFIG_PATH="${SITES_AVAILABLE}/${DOMAIN}.conf"
+ENABLED_PATH="${SITES_ENABLED}/${DOMAIN}.conf"
+NGINX_CONF="/etc/nginx/nginx.conf"
 
+echo "🔧 Setting up reverse proxy for ${DOMAIN} → localhost:${PORT}"
 
 # 1. Create directories if they don't exist
-if [ ! -d "$SITES_AVAILABLE" ]; then
-  sudo mkdir -p "$SITES_AVAILABLE"
+sudo mkdir -p "$SITES_AVAILABLE" "$SITES_ENABLED"
+
+# 2. Check for existing config using server_name (in all confs)
+if sudo grep -R "server_name\s\+\(www\.\)\?${DOMAIN}\b" "$SITES_AVAILABLE" "$SITES_ENABLED" /etc/nginx/conf.d/ 2>/dev/null | grep -q .; then
+  echo "❌ Config already exists for $DOMAIN. Aborting."
+  exit 1
 fi
 
-if [ ! -d "$SITES_ENABLED" ]; then
-  sudo mkdir -p "$SITES_ENABLED"
-fi
-
-# 2. Create Nginx reverse proxy config
-sudo bash -c "cat > $CONFIG_PATH" <<EOF
+# 3. Create the config
+sudo tee "$CONFIG_PATH" > /dev/null <<EOF
 server {
     listen 80;
     server_name ${DOMAIN} www.${DOMAIN};
@@ -37,12 +39,10 @@ server {
     location / {
         proxy_pass http://127.0.0.1:${PORT};
         proxy_http_version 1.1;
-
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-
         proxy_read_timeout 60;
         proxy_connect_timeout 60;
         proxy_redirect off;
@@ -50,23 +50,29 @@ server {
 }
 EOF
 
-# 3. Link config if not already linked
+# 4. Create symlink if not already linked
 if [ ! -f "$ENABLED_PATH" ]; then
+  echo "🔗 Linking config to sites-enabled"
   sudo ln -s "$CONFIG_PATH" "$ENABLED_PATH"
 else
-  echo "Symlink already exists: $ENABLED_PATH"
+  echo "🔁 Symlink already exists: $ENABLED_PATH"
 fi
 
-# 4. Test and reload Nginx
-sudo sed -i '/http {/a \    include /etc/nginx/sites-enabled/*.conf;' /etc/nginx/nginx.conf
-echo "Testing Nginx config..."
-sudo nginx -t
-
-if [ $? -eq 0 ]; then
-  echo "Reloading Nginx..."
-  sudo systemctl reload nginx
-  echo "✅ Reverse proxy for http://${DOMAIN} -> http://localhost:${PORT} is live."
+# 5. Ensure include line exists in nginx.conf (only once)
+if ! grep -q 'include /etc/nginx/sites-enabled/\*;' "$NGINX_CONF"; then
+  echo "➕ Adding include /etc/nginx/sites-enabled/*.conf; to nginx.conf"
+  sudo sed -i '/http {/a \    include /etc/nginx/sites-enabled/*.conf;' "$NGINX_CONF"
 else
-  echo "❌ Nginx config test failed. Please fix errors above."
+  echo "✅ nginx.conf already includes sites-enabled/*.conf"
 fi
 
+# 6. Test & Reload
+echo "🧪 Testing Nginx configuration..."
+if sudo nginx -t; then
+  echo "🔄 Reloading Nginx..."
+  sudo systemctl reload nginx
+  echo "✅ Reverse proxy live: http://${DOMAIN} → http://localhost:${PORT}"
+else
+  echo "❌ Nginx config test failed. Fix errors and try again."
+  exit 1
+fi
