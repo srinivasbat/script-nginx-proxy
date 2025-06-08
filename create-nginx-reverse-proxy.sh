@@ -15,6 +15,7 @@ SITES_ENABLED="/etc/nginx/sites-enabled"
 CONFIG_PATH="$SITES_AVAILABLE/${DOMAIN}.conf"
 ENABLED_PATH="$SITES_ENABLED/${DOMAIN}.conf"
 
+
 # 1. Create directories if they don't exist
 if [ ! -d "$SITES_AVAILABLE" ]; then
   sudo mkdir -p "$SITES_AVAILABLE"
@@ -57,6 +58,7 @@ else
 fi
 
 # 4. Test and reload Nginx
+sudo sed -i '/http {/a \    include /etc/nginx/sites-enabled/*.conf;' /etc/nginx/nginx.conf
 echo "Testing Nginx config..."
 sudo nginx -t
 
